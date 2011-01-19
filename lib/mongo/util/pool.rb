@@ -103,22 +103,26 @@ module Mongo
               "consider increasing the pool size or timeout."
         end
 
+        socket = nil
+        new_socket = nil
         @connection_mutex.synchronize do
           socket = if @checked_out.size < @sockets.size
                      checkout_existing_socket
                    elsif @sockets.size < @size
-                     checkout_new_socket
+                     new_socket = checkout_new_socket
                    end
-
-          return socket if socket
-
-          # Otherwise, wait
-          if @logger
-            @logger.warn "MONGODB Waiting for available connection; " +
-              "#{@checked_out.size} of #{@size} connections checked out."
+          unless socket
+            # Otherwise, wait
+            if @logger
+              @logger.warn "MDB Waiting for available connection; " +
+                "#{@checked_out.size} of #{@size} connections checked out."
+            end
+            @queue.wait(@connection_mutex)
           end
-          @queue.wait(@connection_mutex)
         end
+        
+        @connection['admin'].command({:priority=>@connection.priority}, :sock => new_socket) if new_socket && 0 != @connection.priority
+        return socket if socket
       end
     end
   end
