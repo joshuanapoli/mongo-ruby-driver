@@ -230,4 +230,19 @@ class TestConnection < Test::Unit::TestCase
       assert_equal 0, @con.primary_pool.checked_out.size
     end
   end
+  
+  context "A connection with priority option" do
+    setup do
+      @priority = -1
+      @con = standard_connection(:priority => @priority)
+    end
+    
+    should "have configured priority value" do
+      assert_equal @priority, @con.priority
+    end
+
+    should "have server priority value" do
+      assert_equal({"was" => -1, "ok" => 1.0 }, @con['admin'].command(:priority=>-1))
+    end
+  end
 end

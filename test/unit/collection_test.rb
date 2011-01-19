@@ -44,7 +44,7 @@ class CollectionTest < Test::Unit::TestCase
       @coll.find({:title => 'Moby Dick'}).sort([['title', 1], ['author', 1]]).next_document
     end
 
-    should "not log binary data" do
+    should "not log binary data q1" do
       @conn = Connection.new('localhost', 27017, :logger => @logger, :connect => false)
       @db   = @conn['testing']
       @coll = @db.collection('books')

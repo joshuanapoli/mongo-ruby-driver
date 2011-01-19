@@ -1,3 +1,10 @@
+# Swipely notes
+
+mongo >= 1.0.1 is required by plucky
+mongo 1.0.3 fails with "uninitialized constant OrderedHash"
+mongo >= 1.0.7 is required for mongo server 1.6
+
+
 # Introduction
 
 This is the 10gen-supported Ruby driver for [MongoDB](http://www.mongodb.org).

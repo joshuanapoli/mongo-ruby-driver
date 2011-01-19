@@ -316,11 +316,11 @@ module Mongo
       message.put_int(0)
       message.put_binary(BSON::BSON_CODER.serialize(selector, false, true).to_s)
 
-      @logger.debug("MONGODB #{@db.name}['#{@name}'].remove(#{selector.inspect})") if @logger
+      log_str = "#{@db.name}['#{@name}'].remove(#{selector.inspect})"
       if safe
-        @connection.send_message_with_safe_check(Mongo::Constants::OP_DELETE, message, @db.name, nil, safe)
+        @connection.send_message_with_safe_check(Mongo::Constants::OP_DELETE, message, @db, @db.name, log_str, safe)
       else
-        @connection.send_message(Mongo::Constants::OP_DELETE, message)
+        @connection.send_message(Mongo::Constants::OP_DELETE, message, @db, log_str)
         true
       end
     end
@@ -361,11 +361,11 @@ module Mongo
       message.put_int(update_options)
       message.put_binary(BSON::BSON_CODER.serialize(selector, false, true).to_s)
       message.put_binary(BSON::BSON_CODER.serialize(document, false, true).to_s)
-      @logger.debug("MONGODB #{@db.name}['#{@name}'].update(#{selector.inspect}, #{document.inspect})") if @logger
+      log_str = "#{@db.name}['#{@name}'].update(#{selector.inspect}, #{document.inspect})"
       if safe
-        @connection.send_message_with_safe_check(Mongo::Constants::OP_UPDATE, message, @db.name, nil, safe)
+        @connection.send_message_with_safe_check(Mongo::Constants::OP_UPDATE, message, @db, @db.name, log_str, safe)
       else
-        @connection.send_message(Mongo::Constants::OP_UPDATE, message, nil)
+        @connection.send_message(Mongo::Constants::OP_UPDATE, message, @db, log_str)
       end
     end
 
@@ -776,11 +776,11 @@ module Mongo
       end
       raise InvalidOperation, "Exceded maximum insert size of 16,000,000 bytes" if message.size > 16_000_000
 
-      @logger.debug("MONGODB #{@db.name}['#{collection_name}'].insert(#{documents.inspect})") if @logger
+      log_str = "#{@db.name}['#{collection_name}'].insert(#{documents.inspect})"
       if safe
-        @connection.send_message_with_safe_check(Mongo::Constants::OP_INSERT, message, @db.name, nil, safe)
+        @connection.send_message_with_safe_check(Mongo::Constants::OP_INSERT, message, @db, @db.name, log_str, safe)
       else
-        @connection.send_message(Mongo::Constants::OP_INSERT, message, nil)
+        @connection.send_message(Mongo::Constants::OP_INSERT, message, @db, log_str)
       end
       documents.collect { |o| o[:_id] || o['_id'] }
     end

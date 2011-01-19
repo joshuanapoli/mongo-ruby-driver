@@ -35,7 +35,7 @@ module Mongo
     STANDARD_HEADER_SIZE = 16
     RESPONSE_HEADER_SIZE = 20
 
-    attr_reader :logger, :size, :auths, :primary, :safe, :primary_pool, :host_to_try
+    attr_reader :logger, :size, :auths, :primary, :safe, :primary_pool, :host_to_try, :priority
 
     # Counter for generating unique request ids.
     @@current_request_id = 0
@@ -88,12 +88,15 @@ module Mongo
     # @core connections
     def initialize(host=nil, port=nil, options={})
       @host_to_try = format_pair(host, port)
+      reset_timers
 
       # Host and port of current master.
       @host = @port = nil
 
       # slave_ok can be true only if one node is specified
       @slave_ok = options[:slave_ok]
+
+      @priority = options[:priority] || 0
 
       setup(options)
     end
@@ -340,9 +343,11 @@ module Mongo
     #
     # @param [Integer] operation a MongoDB opcode.
     # @param [BSON::ByteBuffer] message a message to send to the database.
+    # @param [DB] database.
     #
     # @return [Integer] number of bytes sent
-    def send_message(operation, message, log_message=nil)
+    def send_message(operation, message, database, log_message=nil)
+      start = Time.now
       begin
         add_message_headers(message, operation)
         packed_message = message.to_s
@@ -350,6 +355,7 @@ module Mongo
         send_message_on_socket(packed_message, socket)
       ensure
         checkin_writer(socket)
+        log_performance(database, start, log_message || message)
       end
     end
 
@@ -358,6 +364,7 @@ module Mongo
     #
     # @param [Integer] operation a MongoDB opcode.
     # @param [BSON::ByteBuffer] message a message to send to the database.
+    # @param [DB] database.
     # @param [String] db_name the name of the database. used on call to get_last_error.
     # @param [Hash] last_error_params parameters to be sent to getLastError. See DB#error for
     #   available options.
@@ -365,7 +372,8 @@ module Mongo
     # @see DB#get_last_error for valid last error params.
     #
     # @return [Hash] The document returned by the call to getlasterror.
-    def send_message_with_safe_check(operation, message, db_name, log_message=nil, last_error_params=false)
+    def send_message_with_safe_check(operation, message, database, db_name, log_message=nil, last_error_params=false)
+      start = Time.now
       docs = num_received = cursor_id = ''
       add_message_headers(message, operation)
 
@@ -382,6 +390,7 @@ module Mongo
         end
       ensure
         checkin_writer(sock)
+        log_performance(database, start, log_message || message)
       end
 
       if num_received == 1 && (error = docs[0]['err'] || docs[0]['errmsg'])
@@ -397,12 +406,14 @@ module Mongo
     #
     # @param [Integer] operation a MongoDB opcode.
     # @param [BSON::ByteBuffer] message a message to send to the database.
+    # @param [DB] database.
     # @param [Socket] socket a socket to use in lieu of checking out a new one.
     #
     # @return [Array]
     #   An array whose indexes include [0] documents returned, [1] number of document received,
     #   and [3] a cursor_id.
-    def receive_message(operation, message, log_message=nil, socket=nil, command=false)
+    def receive_message(operation, message, database, log_message=nil, socket=nil, command=false)
+      start = Time.now
       request_id = add_message_headers(message, operation)
       packed_message = message.to_s
       begin
@@ -415,6 +426,7 @@ module Mongo
         end
       ensure
         command ? checkin_writer(sock) : checkin_reader(sock)
+        log_performance(database, start, log_message || message)
       end
       result
     end
@@ -427,6 +439,7 @@ module Mongo
     #
     # @raise [ConnectionFailure] if unable to connect to any host or port.
     def connect
+     timer( :mongo_connect_time ) do |start|
       reset_connection
 
       config = check_is_master(@host_to_try)
@@ -437,6 +450,7 @@ module Mongo
       if !connected?
         raise ConnectionFailure, "Failed to connect to a master node at #{@host_to_try[0]}:#{@host_to_try[1]}"
       end
+     end
     end
 
     def connecting?
@@ -486,7 +500,29 @@ module Mongo
       end
     end
 
-    protected
+    # per-thread total latency connecting to the server
+    def connect_time
+      Thread.current[:mongo_connect_time] || 0.0
+    end
+
+    # per-thread total latency sending to the server
+    def send_time
+      Thread.current[:mongo_send_time] || 0.0
+    end
+
+    # per-thread total latency receiving from the server
+    def recv_time
+      Thread.current[:mongo_recv_time] || 0.0
+    end
+
+    # reset the per-thread performance timers
+    def reset_timers
+      Thread.current[:mongo_connect_time] = 0.0
+      Thread.current[:mongo_send_time] = 0.0
+      Thread.current[:mongo_recv_time] = 0.0
+    end
+    
+    private
 
     # Generic initialization code.
     # @protected
@@ -710,6 +746,7 @@ module Mongo
     #
     # @return [Integer] number of bytes sent
     def send_message_on_socket(packed_message, socket)
+     timer( :mongo_send_time ) do |start|
       begin
       total_bytes_sent = socket.send(packed_message, 0)
       if total_bytes_sent != packed_message.size
@@ -725,11 +762,13 @@ module Mongo
         close
         raise ConnectionFailure, "Operation failed with the following exception: #{ex}"
       end
+     end
     end
 
     # Low-level method for receiving data from socket.
     # Requires length and an available socket.
     def receive_message_on_socket(length, socket)
+     timer( :mongo_recv_time ) do |start|
       begin
         message = socket.read(length)
         raise ConnectionFailure, "connection closed" unless message.length > 0
@@ -746,6 +785,7 @@ module Mongo
           raise ConnectionFailure, "Operation failed with the following exception: #{ex}"
       end
       message
+     end
     end
 
     if defined?(Encoding)
@@ -759,5 +799,39 @@ module Mongo
         ""
       end
     end
+    
+  private
+   # Record latency and server-side info.
+   def log_performance(database, start, message)
+     if @logger && !Thread.current[:sw_profiling]
+       now = Time.now
+       ms_latency = (now - start) * 1000
+       formatted = "%.1f" % ms_latency
+       @logger.debug("MDB (#{formatted}ms) #{message}")
+     
+       if ms_latency > 1000
+         Thread.current[:sw_profiling] = true
+         begin
+           database.collection('system.profile').find().sort(['$natural', 'descending']).limit(3).each do |dat|
+             time_ago = "%.2f" % (now - dat['ts']) if dat['ts']
+             @logger.debug("  MDBS (#{dat['millis']}ms, -#{time_ago}s) #{dat['info']}".gsub("\n", ''))
+           end
+         ensure
+           Thread.current[:sw_profiling] = false
+         end
+       end
+     end
+   end
+   
+   # Time the execution of the block, incrementing the given instance variable
+   # by the number of seconds elapsed.
+   def timer( counter )
+     start = Time.now
+     begin
+       yield start
+     ensure
+       Thread.current[counter] = Time.now - start + ( Thread.current[counter] || 0.0 )
+     end
+   end   
   end
 end

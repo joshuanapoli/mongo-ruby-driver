@@ -83,6 +83,8 @@ module Mongo
 
       # Are we allowing reads from secondaries?
       @read_secondary = opts.fetch(:read_secondary, false)
+      
+      @priority = opts[:priority] || 0
 
       setup(opts)
     end
