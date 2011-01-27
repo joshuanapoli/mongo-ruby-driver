@@ -35,7 +35,7 @@ module Mongo
     STANDARD_HEADER_SIZE = 16
     RESPONSE_HEADER_SIZE = 20
 
-    attr_reader :logger, :size, :auths, :primary, :safe, :primary_pool, :host_to_try, :priority
+    attr_reader :logger, :size, :auths, :primary, :safe, :primary_pool, :host_to_try, :priority, :performance_log
 
     # Counter for generating unique request ids.
     @@current_request_id = 0
@@ -583,6 +583,7 @@ module Mongo
       @primary_pool = nil
 
       @logger   = opts[:logger] || nil
+      @performance_log = opts[:performance_log] || nil
 
       @priority = opts[:priority] || 0
 
@@ -824,7 +825,7 @@ module Mongo
   private
    # Record latency and server-side info.
    def log_performance(database, start, message)
-     if @logger && !Thread.current[:sw_profiling]
+     if @performance_log && @logger && !Thread.current[:sw_profiling]
        now = Time.now
        ms_latency = (now - start) * 1000
        formatted = "%.1f" % ms_latency
